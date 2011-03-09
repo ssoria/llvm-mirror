@@ -7,12 +7,12 @@
 
 #define DEBUG_TYPE "SeansBranchProbabilities"
 
-#include "SeansLLVM/SeansBranchProbabilities.h"
+#include "SeansBranchProbabilities.h"
 
 #include "llvm/Constants.h" // ConstantInt
 #include "llvm/DerivedTypes.h"
 #include "llvm/Function.h" // Function
-#include "llvm/Support/Debug.h" // DOUT
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/CFG.h" // pred_iterator
 
 using namespace llvm;
@@ -32,7 +32,7 @@ char BranchProbabilities::ID = 0;
 RegisterPass<BranchProbabilities> Y("SeansBranchProbabilities",
 "Algorithm 1 from Static Brnch Frequency and Program Profile Analysis");
 
-BranchProbabilities::BranchProbabilities() : FunctionPass((intptr_t)&ID)
+BranchProbabilities::BranchProbabilities() : FunctionPass(ID)
 {
 }
 
@@ -46,7 +46,7 @@ void BranchProbabilities::getAnalysisUsage(AnalysisUsage &AU) const
 
 bool BranchProbabilities::runOnFunction(Function &F)
 {
-  DOUT << "Function: " << F.getName() << '\n';
+  DEBUG(dbgs() << "Function: " << F.getName() << '\n');
 
   _LI = &getAnalysis<LoopInfo>();
   _PDT = &getAnalysis<PostDominatorTree>();
@@ -55,7 +55,7 @@ bool BranchProbabilities::runOnFunction(Function &F)
   for (Function::iterator BBI = F.begin(), BBend = F.end(); BBI != BBend; ++BBI)
   {
     _BB = BBI;
-    DOUT << " Block: " << _BB->getName();
+    DEBUG(dbgs() << " Block: " << _BB->getName());
 
     _TI = _BB->getTerminator();
 
@@ -68,7 +68,7 @@ bool BranchProbabilities::runOnFunction(Function &F)
     {
       _Succ[0] = _TI->getSuccessor(0);
       _Succ[1] = _TI->getSuccessor(1);
-      DOUT << '(' << _Succ[0]->getName() << ", " << _Succ[1]->getName() << ')';
+      DEBUG(dbgs() << '(' << _Succ[0]->getName() << ", " << _Succ[1]->getName() << ')');
 
       _fProb[0] = 0.5f;
       _fProb[1] = 0.5f;
@@ -123,24 +123,24 @@ bool BranchProbabilities::runOnFunction(Function &F)
         _EdgeProbs[_BB][BB] = fProb;
       }
     }
-    DOUT << '\n';
+    DEBUG(dbgs() << '\n');
   }
 
-  DOUT << " STATS\n";
+  DEBUG(dbgs() << " STATS\n");
   for (Function::iterator BBI = F.begin(), BBend = F.end(); BBI != BBend; ++BBI)
   {
     _BB = BBI;
-    DOUT << " Block: " << _BB->getName();
+    DEBUG(dbgs() << " Block: " << _BB->getName());
 
     for (succ_iterator BI = succ_begin(_BB), Bend = succ_end(_BB); BI != Bend;
          ++BI)
     {
       BasicBlock *BB = *BI;
-      DOUT << " -> " << BB->getName() << "(" << getProb(_BB, BB) << ")";
+      DEBUG(dbgs() << " -> " << BB->getName() << "(" << getProb(_BB, BB) << ")");
     }
-    DOUT << '\n';
+    DEBUG(dbgs() << '\n');
   }
-  DOUT << '\n';
+  DEBUG(dbgs() << '\n');
 
   return BlockFreqPass(F);
 }
@@ -168,7 +168,7 @@ bool BranchProbabilities::BlockFreqPass(Function &F)
     ProcessLoop(L);
   }
 
-  DOUT << "processing entry to function\n";
+  DEBUG(dbgs() << "processing entry to function\n");
 
   _head = &F.getEntryBlock();
   // mark all blocks reachable from head as not visited
@@ -177,13 +177,13 @@ bool BranchProbabilities::BlockFreqPass(Function &F)
   // NOTE: Not necessary because they are not reachable!
   propagateFreq(_head);
 
-  DOUT << " STATS\n";
+  DEBUG(dbgs() << " STATS\n");
   for (Function::iterator BBI = F.begin(), BBend = F.end(); BBI != BBend; ++BBI)
   {
     _BB = BBI;
-    DOUT << " Block: " << _BB->getName() << ' ' << *_bfreq[_BB] << '\n';
+    DEBUG(dbgs() << " Block: " << _BB->getName() << ' ' << *_bfreq[_BB] << '\n');
   }
-  DOUT << '\n';
+  DEBUG(dbgs() << '\n');
 
   return false;
 }
@@ -275,9 +275,9 @@ void BranchProbabilities::ProcessLoop(Loop *L)
     ProcessLoop(L);
   }
 
-  DOUT << "processing loop ";
-  L->print(DOUT);
-  DOUT << '\n';
+  DEBUG(dbgs() << "processing loop ");
+  //L->print(DEBUG(dbgs());
+  DEBUG(dbgs() << '\n');
   _head = L->getHeader();
   // mark all blocks reachable from head as not visited
   _Visited.clear();
@@ -603,7 +603,7 @@ void BranchProbabilities::PredictAsTaken(int i, float fProbH, char *s)
   if ((i != 0) && (i != 1))
     return;
 
-  DOUT << " " << s << i;
+  DEBUG(dbgs() << " " << s << i);
 
   int iOther = (i * -1) + 1;
   float fProbNotH = 1.0f - fProbH;
