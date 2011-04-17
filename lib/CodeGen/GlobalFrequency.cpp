@@ -1,106 +1,111 @@
 #include "llvm/BasicBlock.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/Module.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/CallSite.h"
+
+#include "LocalFrequency.h"
 
 #include <map>
 
 using namespace llvm;
 
-class BBCalls : public BasicBlockPass
-{
-protected:
-  typedef std::map<const Function *, int> CalleeMap;
-  CalleeMap Callees;
-
-public:
-  typedef CalleeMap::iterator iterator;
-
-  virtual bool runOnBasicBlock(BasicBlock &BB)
-  {
-    for (BasicBlock::iterator I = BB.begin(), E = BB.end(); I != E; ++I)
-    {
-      CallSite CS(cast<Value>(I));
-      if (CS && !isa<DbgInfoIntrinsic>(I))
-      {
-        const Function *Callee = CS.getCalledFunction();
-        if (Callee)
-        {
-          Callees[Callee]++;
-          assert(Callees[Callee] > 0 && "integer overflow");
-        }
-      }
-    }
-  }
-
-  iterator begin() { return Callees.begin(); }
-  iterator end() { return Callees.end(); }
-};
-
 class LocalCallFrequency : public FunctionPass
 {
 protected:
-  std::map<const Function *, float> CalleeFrequencies;
+  typedef std::map<Function *, float> FrequencyMapTy;
+  FrequencyMapTy CalleeFrequencies;
 
 public:
+  static char ID;
+  typedef FrequencyMapTy::iterator iterator;
+
+  LocalCallFrequency() : FunctionPass(ID) {}
+
   virtual bool runOnFunction(Function &F)
   {
+    LocalFrequencies &LBF = getAnalysis<LocalFrequencies>();
     for (Function::iterator I = F.begin(), E = F.end(); I != E; ++I)
     {
-      BBCalls &BBC = getAnalysis<BBCalls>(*I);
-      for (BBCalls::iterator FI = BBC.begin(), FE = BBC.end(); I != E; ++I)
+      for (BasicBlock::iterator BBI = I->begin(), BBE = I->end();
+           BBI != BBE; ++BBI)
       {
-        CalleeFrequencies[FI->first] += FI->second * LocalBlockFrequency[BB];
+        CallSite CS(cast<Value>(BBI));
+        if (CS && !isa<DbgInfoIntrinsic>(BBI))
+        {
+          Function *Callee = CS.getCalledFunction();
+          if (Callee)
+          {
+            CalleeFrequencies[Callee] += LBF[*I];
+          }
+        }
       }
     }
+
+    return false;
   }
 
+  iterator begin() { return CalleeFrequencies.begin(); }
+  iterator end() { return CalleeFrequencies.end(); }
+
 };
+
+char LocalCallFrequency::ID = 0;
 
 class GlobalFrequencies : public ModulePass
 {
 public:
   static char ID;
-  GlobalFrequencies();
+  GlobalFrequencies() : ModulePass(ID) {};
   virtual bool runOnModule(Module &M);
 
 protected:
-  typedef std::pair<const Function *, const Function *> Edge;
+  typedef std::pair<Function *, Function *> Edge;
 
-  std::vector<const Function *> DepthFirstOrder;
-  std::set<const Function *> LoopHeads;
+  void init(Function *root);
+  void UnmarkReachable(Function *F);
+  bool isVisited(Function *f);
+  void PropagateCallFrequencies(Function *f, Function *head, bool isMain);
+
+  std::vector<Function *> DepthFirstOrder;
+  std::set<Function *> LoopHeads;
   std::map<Edge, float> BackEdgeProbability;
-  std::set<const Function *> toVisit;
-  std::map<const Function *, std::set<const Function *>> Predecessors;
-}
+  std::set<Function *> ToVisit;
+  std::map<Function *, std::set<Function *> > Predecessors;
+  std::set<Edge> BackEdges;
+  std::map<Function *, float> CallFrequency;
+  std::map<Edge, float> GlobalEdgeFrequency;
+};
 
-bool GlobalFrequencies::init()
+char GlobalFrequencies::ID = 0;
+
+void GlobalFrequencies::init(Function *root)
 {
-  std::set<const Function *> Visited;
-  std::vector<const Function *> Stack;
+  std::set<Function *> Visited;
+  std::vector<Function *> Stack;
 
   Stack.push_back(root);
   Visited.insert(root);
   while (!Stack.empty())
-  { 
+  {
     Function *caller = Stack.back();
     Stack.pop_back();
     DepthFirstOrder.push_back(caller);
 
-    LocalCallFrequencies &LCF = getAnalysis<LocalCallFrequencies>(root);
-    for (LocalCallFrequencies::iterator I = LCF.begin(), E = LCF.end(); 
+    LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*caller);
+    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
          I != E; ++I)
-    { 
-      const Function *callee = I->first;
+    {
+      Function *callee = I->first;
       Edge edge = std::make_pair(caller, callee);
 
       Predecessors[callee].insert(caller);
       BackEdgeProbability[edge] = I->second;
 
       if (Visited.insert(callee).second)
-      {  
+      {
         Stack.push_back(callee);
-      } 
+      }
       else
       {
         LoopHeads.insert(callee);
@@ -110,23 +115,23 @@ bool GlobalFrequencies::init()
   }
 }
 
-void GlobalFrequencies::UnmarkReachable(const Function *F)
+void GlobalFrequencies::UnmarkReachable(Function *F)
 {
-  std::vector<const Function *> Stack;
+  std::vector<Function *> Stack;
 
-  toVisit.clear();
-  toVisit.insert(F);
-  Stack.push_bacK(F);
+  ToVisit.clear();
+  ToVisit.insert(F);
+  Stack.push_back(F);
   while (!Stack.empty())
   {
-    const Function *F = Stack.back();
+    Function *F = Stack.back();
     Stack.pop_back();
-    LocalCallFrequencies &LCF = getAnalysis<LocalCallFrequencies>(F);
-    for (LocalCallFrequencies::iterator I = LCF.begin(), E = LCF.end();
+    LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*F);
+    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
          I != E; ++I)
     {
-      const Funtion *SucessorFunction = I->first;
-      if (toVisit.insert(SuccessorFunction).second)
+      Function *SuccessorFunction = I->first;
+      if (ToVisit.insert(SuccessorFunction).second)
       {
         Stack.push_back(SuccessorFunction);
       }
@@ -134,22 +139,23 @@ void GlobalFrequencies::UnmarkReachable(const Function *F)
   }
 }
 
-void GlobalFrequencies::isVisited(const Function *f)
+bool GlobalFrequencies::isVisited(Function *f)
 {
-  // visited if not found in toVisit
-  return (toVisit.find(f) == toVisit.end())
+  // visited if not found in ToVisit
+  return (ToVisit.find(f) == ToVisit.end());
 }
 
-void GlobalFrequencies::PropagateCallFrequencies(const Function *f, const Function *head, bool isMain)
+void GlobalFrequencies::PropagateCallFrequencies(Function *f, Function *head, bool isMain)
 {
   if (isVisited(f))
   {
     return;
   }
 
-  for (std::set<const Function *>::iterator I = Predecessors[f].begin(), E = Predecessors[f].end();
+  for (std::set<Function *>::iterator I = Predecessors[f].begin(), E = Predecessors[f].end();
        I != E; ++I)
   {
+    Function *predecessor = *I;
     if (!isVisited(*I) && (BackEdges.count(std::make_pair(predecessor, f)) == 0))
     {
       return;
@@ -166,10 +172,10 @@ void GlobalFrequencies::PropagateCallFrequencies(const Function *f, const Functi
   }
 
   float cyclicProbability = 0;
-  for (std::set<const Function *>::iterator I = Predecessors[f].begin(), E = Predecessors[f].end();
+  for (std::set<Function *>::iterator I = Predecessors[f].begin(), E = Predecessors[f].end();
        I != E; ++I)
   {
-    const Function *predecessor = *I;
+    Function *predecessor = *I;
     Edge edge(predecessor, f);
     if (isMain && BackEdges.count(edge))
     {
@@ -181,19 +187,19 @@ void GlobalFrequencies::PropagateCallFrequencies(const Function *f, const Functi
     }
   }
 
-  if (cyclicProbability > (1.0f - epsilon))
+  if (cyclicProbability > (1.0f - EPSILON))
   {
-    cyclicProbability = 1.0f - epsilon;
+    cyclicProbability = 1.0f - EPSILON;
   }
   CallFrequency[f] /= (1.0f - cyclicProbability);
 
   ToVisit.erase(f);
 
-  LocalCallFrequencies &LCF = getAnalysis<LocalCallFrequencies>(F);
-  for (LocalCallFrequencies::iterator I = LCF.begin(), E = LCF.end();
+  LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*f);
+  for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
        I != E; ++I)
   {
-    const Function *SuccessorFunction = I->first;
+    Function *SuccessorFunction = I->first;
     float localEdgeFrequency = I->second;
     Edge SuccessorEdge(f, SuccessorFunction);
     GlobalEdgeFrequency[SuccessorEdge] = localEdgeFrequency * CallFrequency[f];
@@ -204,25 +210,25 @@ void GlobalFrequencies::PropagateCallFrequencies(const Function *f, const Functi
     }
   }
 
-  for (LocalCallFrequencies::iterator I = LCF.begin(), E = LCF.end();
+  for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
        I != E; ++I)
   {
     Edge SuccessorEdge(f, I->first);
     if (BackEdges.count(SuccessorEdge) == 0)
     {
-      propagateCallFrequencies(I->first, head, isMain);
+      PropagateCallFrequencies(I->first, head, isMain);
     }
   }
 }
 
-bool GlobalFrequencies::runOnModule(Module &M) {
+bool GlobalFrequencies::runOnModule(Module &M)
 {
   Function *root = M.getFunction("main");
   assert(root && "no main");
 
   init(root);
 
-  for (std::vector<const Function *>::iterator I = DepthFirstOrder.rbegin(), E = DepthFirstOrder.rend();
+  for (std::vector<Function *>::reverse_iterator I = DepthFirstOrder.rbegin(), E = DepthFirstOrder.rend();
        I != E; ++I)
   {
     if (LoopHeads.find(*I) != LoopHeads.end())
@@ -234,5 +240,7 @@ bool GlobalFrequencies::runOnModule(Module &M) {
 
   UnmarkReachable(root);
   PropagateCallFrequencies(root, root, true);
+
+  return false;
 }
 
