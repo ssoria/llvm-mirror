@@ -3,30 +3,9 @@
 #include <llvm/Support/Debug.h>
 
 #include "SeansBranchProbabilities.h"
+#include "LocalFrequency.h"
 
 namespace llvm {
-
-#define EPSILON 0.05f
-
-class LocalFrequencies : public FunctionPass
-{
-public:
-  static char ID;
-  LocalFrequencies();
-  virtual bool runOnFunction(Function &F);
-
-protected:
-  typedef std::pair<BasicBlock *, BasicBlock *> Edge;
-  void processLoop(Loop *L, std::map<Edge, float> &BackEdgeProbabilities);
-  void calculateFrequencies(BasicBlock *BB, std::map<Edge, float> &BackEdgeProbabilities);
-  void unmarkReachable(BasicBlock *BB, std::map<BasicBlock *, bool> &Visited);
-  void propagateFrequencies(BasicBlock *BB, BasicBlock *Head, std::map<BasicBlock *, bool> &Visited, std::map<Edge, float> &BackEdgeProbabilities);
-  void calculateBlockFrequency(BasicBlock *BB, std::map<BasicBlock *, bool> &Visited, std::map<Edge, float> &BackEdgeProbabilities);
-  bool isBackEdge(Edge E);
-
-  std::map<Edge, float> EdgeFrequencies;
-  std::map<BasicBlock *, float> BlockFrequencies;
-};
 
 LocalFrequencies::LocalFrequencies() : FunctionPass(ID)
 {
