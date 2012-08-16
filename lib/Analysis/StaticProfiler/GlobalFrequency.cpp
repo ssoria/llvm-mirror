@@ -9,6 +9,7 @@
 #include <map>
 
 using namespace llvm;
+using namespace SeansLLVM;
 
 class LocalCallFrequency : public FunctionPass
 {

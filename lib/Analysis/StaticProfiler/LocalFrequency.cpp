@@ -5,7 +5,9 @@
 #include "SeansBranchProbabilities.h"
 #include "LocalFrequency.h"
 
-namespace llvm {
+namespace SeansLLVM {
+
+char LocalFrequencies::ID = 0;
 
 LocalFrequencies::LocalFrequencies() : FunctionPass(ID)
 {

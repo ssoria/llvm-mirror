@@ -4,7 +4,7 @@
 
 #include "SeansBranchProbabilities.h"
 
-namespace llvm {
+namespace SeansLLVM {
 
 #define EPSILON 0.01f
 
