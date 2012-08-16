@@ -15,6 +15,7 @@ public:
   LocalFrequencies();
   virtual bool runOnFunction(Function &F);
   float operator[](BasicBlock &BB) { return BlockFrequencies[&BB]; }
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const;
 
 protected:
   typedef std::pair<BasicBlock *, BasicBlock *> Edge;

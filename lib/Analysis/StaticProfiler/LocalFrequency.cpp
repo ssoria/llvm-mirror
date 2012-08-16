@@ -9,8 +9,18 @@ namespace SeansLLVM {
 
 char LocalFrequencies::ID = 0;
 
+static RegisterPass<LocalFrequencies> X("local-freqs",
+"Local frequencies algorithm from Static Branch Frequency and Program Profile Analysis", false, false);
+
 LocalFrequencies::LocalFrequencies() : FunctionPass(ID)
 {
+}
+
+void LocalFrequencies::getAnalysisUsage(AnalysisUsage &AU) const
+{
+  AU.setPreservesAll();
+  AU.addRequired<LoopInfo>();
+  AU.addRequired<BranchProbabilities>();
 }
 
 bool LocalFrequencies::runOnFunction(Function &F)

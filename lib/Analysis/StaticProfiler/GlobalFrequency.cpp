@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "llvm/BasicBlock.h"
 #include "llvm/IntrinsicInst.h"
 #include "llvm/Module.h"
@@ -22,6 +23,12 @@ public:
   typedef FrequencyMapTy::iterator iterator;
 
   LocalCallFrequency() : FunctionPass(ID) {}
+
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const
+  {
+    AU.setPreservesAll();
+    AU.addRequired<LocalFrequencies>();
+  }
 
   virtual bool runOnFunction(Function &F)
   {
@@ -53,12 +60,23 @@ public:
 
 char LocalCallFrequency::ID = 0;
 
+static RegisterPass<LocalCallFrequency> Y("local-call-freq",
+"Local call frequency algorithm from Static Branch Frequency and Program Profile Analysis", false, false);
+
+
 class GlobalFrequencies : public ModulePass
 {
 public:
   static char ID;
   GlobalFrequencies() : ModulePass(ID) {};
   virtual bool runOnModule(Module &M);
+
+  virtual void getAnalysisUsage(AnalysisUsage &AU) const
+  {
+    AU.setPreservesAll();
+    AU.addRequired<LocalCallFrequency>();
+    AU.addRequired<LocalFrequencies>();
+  }
 
 protected:
   typedef std::pair<Function *, Function *> Edge;
@@ -80,6 +98,9 @@ protected:
 
 char GlobalFrequencies::ID = 0;
 
+static RegisterPass<GlobalFrequencies> X("static-prof",
+"Algorithm 2(?) from Static Brnch Frequency and Program Profile Analysis", false, false);
+
 void GlobalFrequencies::init(Function *root)
 {
   std::set<Function *> Visited;
@@ -93,24 +114,28 @@ void GlobalFrequencies::init(Function *root)
     Stack.pop_back();
     DepthFirstOrder.push_back(caller);
 
-    LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*caller);
-    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
-         I != E; ++I)
+    // assumes externals like malloc and printf never call back to our functions
+    if (!caller->isDeclaration())
     {
-      Function *callee = I->first;
-      Edge edge = std::make_pair(caller, callee);
-
-      Predecessors[callee].insert(caller);
-      BackEdgeProbability[edge] = I->second;
-
-      if (Visited.insert(callee).second)
+      LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*caller);
+      for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
+           I != E; ++I)
       {
-        Stack.push_back(callee);
-      }
-      else
-      {
-        LoopHeads.insert(callee);
-        BackEdges.insert(edge);
+        Function *callee = I->first;
+        Edge edge = std::make_pair(caller, callee);
+
+        Predecessors[callee].insert(caller);
+        BackEdgeProbability[edge] = I->second;
+
+        if (Visited.insert(callee).second)
+        {
+          Stack.push_back(callee);
+        }
+        else
+        {
+          LoopHeads.insert(callee);
+          BackEdges.insert(edge);
+        }
       }
     }
   }
@@ -127,14 +152,18 @@ void GlobalFrequencies::UnmarkReachable(Function *F)
   {
     Function *F = Stack.back();
     Stack.pop_back();
-    LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*F);
-    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
-         I != E; ++I)
+
+    if (!F->isDeclaration())
     {
-      Function *SuccessorFunction = I->first;
-      if (ToVisit.insert(SuccessorFunction).second)
+      LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*F);
+      for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
+           I != E; ++I)
       {
-        Stack.push_back(SuccessorFunction);
+        Function *SuccessorFunction = I->first;
+        if (ToVisit.insert(SuccessorFunction).second)
+        {
+          Stack.push_back(SuccessorFunction);
+        }
       }
     }
   }
@@ -196,28 +225,31 @@ void GlobalFrequencies::PropagateCallFrequencies(Function *f, Function *head, bo
 
   ToVisit.erase(f);
 
-  LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*f);
-  for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
-       I != E; ++I)
+  if (!f->isDeclaration())
   {
-    Function *SuccessorFunction = I->first;
-    float localEdgeFrequency = I->second;
-    Edge SuccessorEdge(f, SuccessorFunction);
-    GlobalEdgeFrequency[SuccessorEdge] = localEdgeFrequency * CallFrequency[f];
-
-    if (!isMain && (SuccessorFunction == head))
+    LocalCallFrequency &LCF = getAnalysis<LocalCallFrequency>(*f);
+    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
+         I != E; ++I)
     {
-      BackEdgeProbability[SuccessorEdge] = localEdgeFrequency * CallFrequency[f];
+      Function *SuccessorFunction = I->first;
+      float localEdgeFrequency = I->second;
+      Edge SuccessorEdge(f, SuccessorFunction);
+      GlobalEdgeFrequency[SuccessorEdge] = localEdgeFrequency * CallFrequency[f];
+
+      if (!isMain && (SuccessorFunction == head))
+      {
+        BackEdgeProbability[SuccessorEdge] = localEdgeFrequency * CallFrequency[f];
+      }
     }
-  }
 
-  for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
-       I != E; ++I)
-  {
-    Edge SuccessorEdge(f, I->first);
-    if (BackEdges.count(SuccessorEdge) == 0)
+    for (LocalCallFrequency::iterator I = LCF.begin(), E = LCF.end();
+         I != E; ++I)
     {
-      PropagateCallFrequencies(I->first, head, isMain);
+      Edge SuccessorEdge(f, I->first);
+      if (BackEdges.count(SuccessorEdge) == 0)
+      {
+        PropagateCallFrequencies(I->first, head, isMain);
+      }
     }
   }
 }
@@ -241,6 +273,43 @@ bool GlobalFrequencies::runOnModule(Module &M)
 
   UnmarkReachable(root);
   PropagateCallFrequencies(root, root, true);
+
+  char fStr[8];
+  float total = 0;
+  for (Module::iterator F = M.begin(), fEnd = M.end(); F != fEnd; ++F)
+  {
+    if (!F->isDeclaration())
+      total += CallFrequency[&*F];
+  }
+
+  dbgs() << "Global function frequency:\n";
+  for (Module::iterator F = M.begin(), fEnd = M.end(); F != fEnd; ++F)
+  {
+    if (!F->isDeclaration())
+    {
+      snprintf(fStr, 8, "%f.3", (CallFrequency[&*F] / total));
+      dbgs() << F->getName() << " " << fStr << "\n";
+    }
+  }
+  dbgs() << "\n";
+
+  dbgs() << "Global block frequency:\n";
+  for (Module::iterator F = M.begin(), fEnd = M.end(); F != fEnd; ++F)
+  {
+    if (F->isDeclaration()) continue;
+    LocalFrequencies &LBF = getAnalysis<LocalFrequencies>(*F);
+
+    float btotal = 0;
+    for (Function::iterator BB = F->begin(), bbEnd = F->end(); BB != bbEnd; ++BB)
+      btotal += LBF[*BB];
+
+    for (Function::iterator BB = F->begin(), bbEnd = F->end(); BB != bbEnd; ++BB)
+    {
+      snprintf(fStr, 8, "%f.3", (LBF[*BB] / btotal) * (CallFrequency[&*F] / total));
+      dbgs() << F->getName() << " " << BB->getName() << " " << fStr << "\n";
+    }
+  }
+  dbgs() << "\n";
 
   return false;
 }
