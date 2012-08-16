@@ -35,3 +35,8 @@ projects/*
 !projects/Makefile
 # Clang, which is tracked independently.
 tools/clang
+
+# Sean did this
+Debug+Asserts/
+docs/*
+*.inc
